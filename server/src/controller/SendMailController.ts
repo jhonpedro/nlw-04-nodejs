@@ -6,6 +6,7 @@ import SurveyRepository from '../repositories/SurveyRepository'
 import SurveysUsersRepository from '../repositories/SurveysUsersRepository'
 import UserRepository from '../repositories/UserRepository'
 import SendMailService from '../services/SendMailService'
+import AppError from '../utils/Errors/AppError'
 
 class SendMailController {
 	static async execute(req: Request, res: Response) {
@@ -18,45 +19,60 @@ class SendMailController {
 		const user = await userRepository.findOne({ email })
 
 		if (!user) {
-			return res.status(400).json({ message: 'user do not exists' })
+			throw new AppError('user do not exist')
 		}
 
 		const survey = await surveyRepository.findOne({ id: survey_id })
 
 		if (!survey) {
-			return res.status(400).json({ message: 'survey do not exists' })
-		}
-
-		const surveyUserToCreate = surveysUsersRepository.create({
-			user_id: user.id,
-			survey_id,
-		})
-
-		const surveyUser = await surveysUsersRepository.findOne({
-			where: [{ user_id: user.id }, { value: null }],
-			relations: ['user', 'survey'],
-		})
-
-		if (!surveyUser) {
-			await surveysUsersRepository.save(surveyUserToCreate)
+			throw new AppError('survey do not exist')
 		}
 
 		const variables = {
 			name: user.name,
 			title: survey.title,
 			description: survey.description,
-			user_id: user.id,
+			id: '',
 			url: process.env.URL_MAIL,
 		}
 
+		const surveyUserToSave = surveysUsersRepository.create({
+			user_id: user.id,
+			survey_id,
+		})
+
+		const surveyUserAlreadyExists = await surveysUsersRepository.findOne({
+			where: { user_id: user.id, survey_id },
+			relations: ['user', 'survey'],
+		})
+
+		if (surveyUserAlreadyExists) {
+			variables.id = surveyUserAlreadyExists.id
+
+			console.log('alredy exist sending same')
+
+			await SendMailService.execute({
+				to: email,
+				subject: survey.title,
+				variables,
+				path: resolve(__dirname, '..', 'views', 'emails', 'npsMail.hbs'),
+			})
+
+			return res.json(surveyUserAlreadyExists)
+		} else {
+			variables.id = surveyUserToSave.id
+			await surveysUsersRepository.save(surveyUserToSave)
+		}
+		console.log('dont exis sending different')
+
 		await SendMailService.execute({
-			to: user.email,
+			to: email,
 			subject: survey.title,
 			variables,
 			path: resolve(__dirname, '..', 'views', 'emails', 'npsMail.hbs'),
 		})
 
-		return res.json(surveyUser)
+		return res.json(surveyUserToSave)
 	}
 }
 
